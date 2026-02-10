@@ -1,0 +1,284 @@
+"""
+File: windowpane_initialization_example.py
+Author: Jake Halpern
+Last Edit Date: 03/2025
+Description: This script shows how to set up planar non-encircling coils tangent to an 
+             axisymmetric winding surface and planar toroidal field coils that can be 
+             shifted and tilted radially 
+             
+"""
+import numpy as np
+from scipy.interpolate import RegularGridInterpolator
+from simsopt.geo import CurvePlanarFourier, create_equally_spaced_curves
+import scipy.integrate as spi
+from scipy.special import ellipe
+from scipy.integrate import quad
+from scipy.optimize import root_scalar
+
+# These four functions are used to compute the rotation quaternion for the coil
+def quaternion_from_axis_angle(axis, theta):
+    """Compute a quaternion from a rotation axis and angle."""
+    axis = axis / np.linalg.norm(axis)
+    q0 = np.cos(theta / 2)
+    q_vec = axis * np.sin(theta / 2)
+    return np.array([q0, *q_vec])
+
+def quaternion_multiply(q1, q2):
+    """Multiply two quaternions: q = q1 * q2."""
+    w1, x1, y1, z1 = q1
+    w2, x2, y2, z2 = q2
+    return np.array([
+        w1*w2 - x1*x2 - y1*y2 - z1*z2,
+        w1*x2 + x1*w2 + y1*z2 - z1*y2,
+        w1*y2 - x1*z2 + y1*w2 + z1*x2,
+        w1*z2 + x1*y2 - y1*x2 + z1*w2
+    ])
+
+def rotate_vector(v, q):
+    """Rotate a vector v using quaternion q."""
+    q_conjugate = np.array([q[0], -q[1], -q[2], -q[3]])  # q* (conjugate)
+    v_quat = np.array([0, *v])  # Convert v to quaternion form
+    v_rotated = quaternion_multiply(quaternion_multiply(q, v_quat), q_conjugate)
+    return v_rotated[1:]  # Return the vector part
+
+def compute_quaternion(normal, tangent):
+    """
+    Compute the quaternion to rotate the upward direction [0, 0, 1] to the given unit normal vector.
+    Then, compute the change needed to align the x direction [1, 0, 0] to the desired tangent after the first rotation.
+    
+    Parameters:
+        normal (array-like): A 3-element array representing the unit normal vector [n_x, n_y, n_z].
+        tangent (array-like): A 3-element array representing the unit tangent vector [t_x, t_y, t_z].
+    
+    Returns:
+        np.array: Quaternion as [q0, qi, qj, qk].
+    """
+    # Ensure input vectors are numpy arrays and normalized
+    normal = np.asarray(normal)
+    tangent = np.asarray(tangent)
+
+    if not np.isclose(np.linalg.norm(normal), 1.0):
+        raise ValueError("The input normal must be a unit vector.")
+    if not np.isclose(np.linalg.norm(tangent), 1.0):
+        raise ValueError("The input tangent must be a unit vector.")
+
+    # Step 1: Rotate +z (upward) to normal
+    upward = np.array([0.0, 0.0, 1.0])
+    cos_theta1 = np.dot(upward, normal)
+    axis1 = np.cross(upward, normal)
+
+    if np.allclose(axis1, 0):
+        q1 = np.array([1.0, 0.0, 0.0, 0.0]) if np.allclose(normal, upward) else np.array([0.0, 1.0, 0.0, 0.0])
+    else:
+        axis1 /= np.linalg.norm(axis1)
+        theta1 = np.arccos(np.clip(cos_theta1, -1.0, 1.0))
+        q1 = quaternion_from_axis_angle(axis1, theta1)
+
+    # Step 2: Rotate initial x-direction using q1
+    initial_x = np.array([1.0, 0.0, 0.0])
+    rotated_x = rotate_vector(initial_x, q1)
+
+    # Step 3: Rotate rotated_x to match desired tangent
+    axis2 = np.cross(rotated_x, tangent)
+    if np.linalg.norm(axis2) < 1e-8:
+        q2 = np.array([1.0, 0.0, 0.0, 0.0])  # No rotation needed
+    else:
+        axis2 /= np.linalg.norm(axis2)
+        theta2 = np.arccos(np.clip(np.dot(rotated_x, tangent), -1.0, 1.0))
+        q2 = quaternion_from_axis_angle(axis2, theta2)
+
+    # Final quaternion (q2 * q1)
+    q_final = quaternion_multiply(q2, q1)
+    return q_final
+
+# These functions compute the Fourier series coefficients for the superellipse
+def rho(theta, a, b, n):
+    return ( 1/(abs(np.cos(theta)/a)**(n) + abs(np.sin(theta)/b)**(n) ) ** (1/(n)))
+# Define Fourier coefficient integrals
+def a_m(m, a, b, n):
+    integrand = lambda theta: rho(theta, a, b, n) * np.cos(m * theta)
+    if m==0:
+        return (1 / (2 * np.pi)) * spi.quad(integrand, 0, 2 * np.pi)[0]
+    else:
+        return (1 / np.pi) * spi.quad(integrand, 0, 2 * np.pi)[0]
+
+def b_m(m, a, b, n):
+    integrand = lambda theta: rho(theta, a, b, n) * np.sin(m * theta)
+    return (1 / np.pi) * spi.quad(integrand, 0, 2 * np.pi)[0]
+
+# Compute Fourier coefficients up to a given order
+def compute_fourier_coeffs(max_order, a, b, n):
+    coeffs = {'a_m': [], 'b_m': []}
+    for m in range(max_order + 1):
+        coeffs['a_m'].append(a_m(m, a, b, n))
+        coeffs['b_m'].append(b_m(m, a, b, n))
+    return coeffs
+
+# Reconstruct the Fourier series approximation
+def rho_fourier(theta, coeffs, max_order):
+    rho_approx = coeffs['a_m'][0]
+    for m in range(1, max_order + 1):
+        rho_approx += coeffs['a_m'][m] * np.cos(m * theta) + coeffs['b_m'][m] * np.sin(m * theta)
+    return rho_approx
+
+# use this to evenly space coils on elliptical grid
+# since evenly spaced in poloidal angle won't work
+# must use quadrature for elliptic integral
+def generate_even_arc_angles(a, b, ntheta):
+    def arc_length_diff(theta):
+        return np.sqrt((a * np.sin(theta))**2 + (b * np.cos(theta))**2)
+    # Total arc length of the ellipse
+    total_arc_length, _ = quad(arc_length_diff, 0, 2 * np.pi)
+    arc_lengths = np.linspace(0, total_arc_length, ntheta, endpoint=False)
+    def arc_length_to_theta(theta, s_target):
+        s, _ = quad(arc_length_diff, 0, theta)
+        return s - s_target
+    # Solve for theta corresponding to each arc length
+    thetas = np.zeros(ntheta)
+    for i, s in enumerate(arc_lengths):
+        if i != 0:
+            result = root_scalar(arc_length_to_theta, args=(s,), bracket=[thetas[i-1], 2*np.pi])
+            thetas[i] = result.root
+    return thetas
+
+def generate_windowpane_array(winding_surface, inboard_radius, wp_fil_spacing, half_per_spacing, wp_n, numquadpoints=32, order=12, verbose=False):
+    """
+    Initialize an array of nwps_poloidal x nwps_toroidal planar windowpane coils on a winding surface
+    Coils are initialized with a current of 1, that can then be scaled using ScaledCurrent
+    Parameters:
+        winding_surface: surface upon which to place the coils, with coil plane locally tangent to the surface normal
+                         assumed to be an elliptical cross section
+        inboard_radius: radius of dipoles at inboard midplane - constant poloidally, will increase toroidally
+        wp_fil_spacing: spacing wp filaments
+        half_per_spacing: spacing between half period segments
+        wp_n: value of n for superellipse, see https://en.wikipedia.org/wiki/Superellipse
+        numquadpoints: number of points representing each coil (see CurvePlanarFourier documentation)
+        order: number of Fourier moments for the planar coil representation, 0 = circle 
+               (see CurvePlanarFourier documentation), more for ellipse approximation
+    Returns:
+        base_wp_curves: list of initialized curves (half field period)
+    """    
+    # Identify locations of windowpanes
+    VV_a = winding_surface.get_rc(1,0)
+    VV_b = winding_surface.get_zs(1,0)
+    VV_R0 = winding_surface.get_rc(0,0)
+    arc_length = 4 * VV_a * ellipe(1-(VV_b/VV_a)**2)
+    nwps_poloidal = int(arc_length / (2 * inboard_radius + wp_fil_spacing)) # figure out how many poloidal dipoles can fit for target radius
+    Rpol = arc_length / 2 / nwps_poloidal - wp_fil_spacing / 2 # adjust the poloidal length based off npol to fix filament distance
+    theta_locs = generate_even_arc_angles(VV_a, VV_b, nwps_poloidal)
+    nwps_toroidal = int((np.pi/winding_surface.nfp*(VV_R0 - VV_a) - half_per_spacing + wp_fil_spacing) / (2 * inboard_radius + wp_fil_spacing))
+    if verbose:
+        print(f'     Number of Toroidal Dipoles: {nwps_toroidal}')
+        print(f'     Number of Poroidal Dipoles: {nwps_poloidal}')
+    # Interpolate unit normal and gamma vectors of winding surface at location of windowpane centers
+    unitn_interpolators =        [RegularGridInterpolator((winding_surface.quadpoints_phi, winding_surface.quadpoints_theta), winding_surface.unitnormal()[..., i], method='linear') for i in range(3)]
+    gamma_interpolators =        [RegularGridInterpolator((winding_surface.quadpoints_phi, winding_surface.quadpoints_theta), winding_surface.gamma()[..., i], method='linear') for i in range(3)]
+    dgammadtheta_interpolators = [RegularGridInterpolator((winding_surface.quadpoints_phi, winding_surface.quadpoints_theta), winding_surface.dgammadtheta()[..., i], method='linear') for i in range(3)]
+    # Initialize curves
+    base_wp_curves = []
+    for ii in range(nwps_poloidal):
+        for jj in range(nwps_toroidal):
+            theta_coil = theta_locs[ii]
+            r = VV_a*VV_b / np.sqrt((VV_b*np.cos(theta_coil))**2 + (VV_a*np.sin(theta_coil))**2)
+            Rtor = (np.pi/winding_surface.nfp*(VV_R0 + r * np.cos(theta_coil)) - half_per_spacing - (nwps_toroidal-1) * wp_fil_spacing) / (2 * nwps_toroidal)
+            # Calculate toroidal angle of center of coil
+            dphi = (half_per_spacing/2 + Rtor) / (VV_R0 + r * np.cos(theta_coil)) # need to add buffer in phi for gaps in panels
+            phi_coil = dphi + jj * (2 * Rtor + wp_fil_spacing) / (VV_R0 + r * np.cos(theta_coil))
+            # Interpolate coil center and rotation vectors
+            unitn_interp =        np.stack([interp((phi_coil/(2*np.pi), theta_coil/(2*np.pi))) for interp in unitn_interpolators], axis=-1)
+            gamma_interp =        np.stack([interp((phi_coil/(2*np.pi), theta_coil/(2*np.pi))) for interp in gamma_interpolators], axis=-1)
+            dgammadtheta_interp = np.stack([interp((phi_coil/(2*np.pi), theta_coil/(2*np.pi))) for interp in dgammadtheta_interpolators], axis=-1)
+            curve = CurvePlanarFourier(numquadpoints, order, winding_surface.nfp, stellsym=True)
+            # dofs stored as: [r0, higher order curve terms, q_0, q_i, q_j, q_k, x0, y0, z0]
+            # Compute fourier coefficients for given super-ellipse
+            coeffs = compute_fourier_coeffs(order, Rpol, Rtor, wp_n)
+            for m in range(order+1):
+                curve.set(f'x{m}', coeffs['a_m'][m])
+                if m!=0:
+                    curve.set(f'x{m+order+1}', coeffs['b_m'][m])
+            # Align the coil normal with the surface normal and Rpol axis with dgamma/dtheta
+            # Renormalize the vector because interpolation can slightly modify its norm
+            quaternion = compute_quaternion(unitn_interp/np.linalg.norm(unitn_interp), dgammadtheta_interp/np.linalg.norm(dgammadtheta_interp))
+            curve.set(f'x{curve.dof_size-7}', quaternion[0])
+            curve.set(f'x{curve.dof_size-6}', quaternion[1])
+            curve.set(f'x{curve.dof_size-5}', quaternion[2])
+            curve.set(f'x{curve.dof_size-4}', quaternion[3])
+            # Align the coil center with the winding surface gamma
+            curve.set(f"x{curve.dof_size-3}", gamma_interp[0])
+            curve.set(f"x{curve.dof_size-2}", gamma_interp[1])
+            curve.set(f"x{curve.dof_size-1}", gamma_interp[2])
+            base_wp_curves.append(curve)
+    return base_wp_curves
+
+def generate_tf_array(winding_surface, ntf, TF_R0, TF_a, TF_b, fixed_geo_tfs=False, numquadpoints=32):
+    """
+    Initialize an array of planar toroidal field coils over a half field period
+    Parameters:
+        winding_surface: surface upon which to obtain field periodicity/stellarator symmetry for the coils
+        ntf: number of TF coils per half field period
+        TF_R0: major radius of the TF coils
+        TF_a: minor radius of the TF coils (in R direction)
+        TF_b: minor radius of the TF coils (in Z direction)
+        fixed_geo_tfs: whether to fix the geometric degrees of freedom of the TF coils
+        numquadpoints: number of quadrature points representing each coil
+    Returns:
+        base_tf_curves: list of initialized curves (half field period)
+    """  
+    if not fixed_geo_tfs:
+        try:
+            from simsopt.geo import create_equally_spaced_cylindrical_curves
+            base_tf_curves = create_equally_spaced_cylindrical_curves(ntf, winding_surface.nfp, stellsym=winding_surface.stellsym, R0=TF_R0, a=TF_a, b=TF_b, numquadpoints=numquadpoints)
+        except ImportError:
+            raise ImportError("Need to be on the windowpane branch with the correct TF curve class to unfix TF geometry")
+    else:
+        # order=1 is fine for elliptical
+        base_tf_curves = create_equally_spaced_curves(ncurves=ntf, nfp=winding_surface.nfp, stellsym=winding_surface.stellsym, R0=TF_R0, R1=TF_a, order=1, numquadpoints=numquadpoints)
+        # add this for elliptical TF coils - keep same ellipticity as VV
+        for c in base_tf_curves:
+            c.set("zs(1)", -TF_b) # see create_equally_spaced_curves doc for minus sign info
+
+    return base_tf_curves
+
+def generate_curves():
+    from simsopt.geo import SurfaceRZFourier
+    from simsopt.geo import curves_to_vtk
+    # load in a sample hybrid torus equilibria
+    surf_plas = SurfaceRZFourier.from_wout('wout_nfp22ginsburg_000_000281.nc', range='half period')
+    # create a vacuum vessel to place coils on with sufficient plasma-coil distance
+    VV = SurfaceRZFourier(nfp=surf_plas.nfp)
+    VV.set_rc(0, 0, 1.0)
+    VV.set_rc(1, 0, 0.25)
+    VV.set_zs(1, 0, 0.27)
+    # choose some reasonable parameters for array initialization
+    # note for intialization, we use the VV as the surface
+    base_wp_curves = generate_windowpane_array(winding_surface=VV,
+                                               inboard_radius=0.05,
+                                               wp_fil_spacing=0.05,
+                                               half_per_spacing=0.05,
+                                               wp_n=2, # elliptical coils
+                                               numquadpoints=32,
+                                               order=12, # want high order to approximate ellipse
+                                               verbose=True,
+                                            )
+    # generate TFs of the class CurvePlanarEllipticalCylindrical (fixed_geo_TFs=False)
+    base_tf_curves = generate_tf_array(winding_surface=VV, 
+                                       ntf=5,
+                                       TF_R0=1.0,
+                                       TF_a=0.4,
+                                       TF_b=0.46,
+                                       fixed_geo_tfs=False,
+                                       numquadpoints=32,
+    )
+    # unfix the relevant TF dofs
+    for c in base_tf_curves:
+        c.fix_all()
+        c.unfix('R0')
+        c.unfix('r_rotation')
+
+    # export curves
+    curves_to_vtk(base_wp_curves + base_tf_curves, 'test_curves')
+    surf_plas.to_vtk('test_winding_surf')
+    VV.to_vtk('test_vessel')
+
+if __name__=='__main__':
+    generate_curves()
