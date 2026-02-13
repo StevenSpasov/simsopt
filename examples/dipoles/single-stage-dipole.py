@@ -1,7 +1,3 @@
-# Taking Rithik's banana coils code and adapting it into dipole coils
-# Important note: banana coils are still the same variable name, I will rename later
-# Main differences: fixed coil geometry, only optimize currents; added a current penalty term
-
 import os
 import io
 import numpy as np
@@ -22,53 +18,6 @@ from simsopt._core.derivative import derivative_dec
 from simsopt.mhd.vmec import Vmec
 from simsopt._core.derivative import Derivative
 from helper_functions import coil_currents_on_theta_phi_grid, plot_coil_currents_on_theta_phi_grid
-"""
-class CurrentCap(Optimizable):
-    #Soft cap on |I| for a set of current DOFs:
-      #Jcp = sum_i max(|I_i| - threshold, 0)^2
-
-    def __init__(self, current_dofs, threshold):
-        # 'current_dofs' must be a list of Current objects whose DOFs are unfixed
-        super().__init__(depends_on=list(current_dofs))
-        self.threshold = float(threshold)
-        self._J = None
-        self._dJ = None
-
-    def J(self):
-        if self._J is None:
-            I = self.x  # vector of currents (same order as children)
-            excess = np.maximum(np.abs(I) - self.threshold, 0.0)
-            self._J = float(np.dot(excess, excess))
-        return self._J
-
-    def recompute_bell(self, parent=None):
-        self._J = None
-        self._dJ = None
-
-    @derivative_dec
-    def dJ(self):
-        if self._dJ is None:
-            I = self.x
-            diff = np.abs(I) - self.threshold
-            mask = diff > 0
-            # d/dI of (max(|I|-T,0))^2 = 2*max(|I|-T,0) * sign(I)
-            grad = np.where(I > 0.0, 2.0 * (I - self.threshold),
-                            2.0 * (I + self.threshold))
-            full_grad = (grad * mask).astype(float)
-
-            partials = {}
-            idx = 0
-            for dep in self.parents:
-                # Get the number of DOFs for the current dependency
-                num_dofs = dep.dof_size
-                # Assign the corresponding slice of the full gradient
-                partials[dep] = full_grad[idx:idx + num_dofs]
-                idx += num_dofs
-
-            self._dJ = Derivative(partials)
-        return self._dJ
-"""
-
 
 class CurrentCap(Optimizable):
     """
@@ -363,13 +312,6 @@ def crossSectionPlot(surf_coils, surf, dipole_curve, filename):
         rs = np.append(rs, rs[0])
         zs = cs[:, 2];
         zs = np.append(zs, zs[0])
-        '''
-        plasma_poly = Polygon(zip(rs, zs))
-        if not plasma_poly.within(hbt_poly):
-            plt.close()
-            print("Plasma surface not within HBT boundary — skipping plot.")
-            return False
-        '''
         plt.plot(rs, zs, label=f'Φ={phi_slice * 2:0.2f}π')
     plt.xlabel('R [m]', fontsize=18, fontweight='bold')
     plt.ylabel('Z [m]', fontsize=18, fontweight='bold')
@@ -536,12 +478,6 @@ def callback(x):
     print(f"{'Boozer Residual':{width}} = {J_Boozer:.6e} (dJ = {dJ_Boozer:.6e})", file=buffer)
     print(f"{'ι Penalty':{width}} = {J_iota:.6e} (dJ = {dJ_iota:.6e})", file=buffer)
     print(f"{'Iotas (actual)':{width}} = {iota_str}", file=buffer)
-    """ also removed for dipoles
-    print(f"{'Curve Length Penalty':{width}} = {J_len:.6e} (dJ = {dJ_len:.6e})", file=buffer)
-    print(f"{'Curve-Curve Penalty':{width}} = {J_cc:.6e} (min={curvecurve_min:.3e}) (dJ = {dJ_cc:.6e})", file=buffer)
-    print(f"{'Curve-Surface Penalty':{width}} = {J_cs:.6e} (min={curvesurf_min:.3e}) (dJ = {dJ_cs:.6e})", file=buffer)
-    print(f"{'Curve Length':{width}} = {length:.6e}", file=buffer)
-    """
     print(f"{'Surf-Vessel Penalty':{width}} = {J_surf:.6e} (dJ = {dJ_surf:.6e})", file=buffer)
     print(f"{'⟨|B·n|⟩':{width}} = {BdotN:.6e}", file=buffer)
     print(f"{'Intersecting':{width}} = {intersecting}", file=buffer)
@@ -592,7 +528,6 @@ ftol_by_mpol = {5: 5e-7, 6: 1e-7, 7: 5e-8, 8: 1e-8, 9: 5e-9, 10: 1e-10}
 gtol_by_mpol = {5: 5e-4, 6: 1e-4, 7: 5e-5, 8: 1e-6, 9: 1e-7, 10: 1e-8}
 
 # Output directory setup
-# yes, I accidentally put the vol 0.45 results in this folder
 OUT_DIR = f"./scans/current200kA_tfunfixed_iota0.1_vol0.4"
 os.makedirs(OUT_DIR, exist_ok=True)
 
@@ -630,15 +565,13 @@ surf_coils.set_zs(1, 0, 0.3012169999944218)
 # ------------------------
 ## the wout file nc is the surface, the biot_savart_opt.json is in the outputs folder for that surface
 # for the filename I should include the full path to the wout file from run optimize on that surface
-#filename = 'wout_nfp22ginsburg_000_000281.nc'
-#bs = load('..outputs/20250314_unfixed_TFs/wout_nfp22ginsburg_000_000281.nc/03_ntf4_diprad_0.045_VVa_0.2355263272670667_VV_R0_1.037468882271737_ellipticalVV/bs_opt.json')
 filename = 'wout_nfp22ginsburg_000_000281.nc'
 # taken from simsoppt/examples/outputs/20250303_08_iota_unfixed_TFs
 bs = load('scan42_bs_opt.json')
 #surf = SurfaceRZFourier.from_wout(filename, range="half period", nphi=255, ntheta=64, s=0.24)
 # s is normalized toroidal flux, I can see it in Jakes' run_optimize_scan.py
 surf = SurfaceRZFourier.from_wout(filename, range="half period", nphi=128, ntheta=64)
-#surf.set_dofs(surf.get_dofs() / surf.major_radius())  # scale to desired major radius
+#surf.set_dofs(surf.get_dofs() / surf.major_radius())  # scale to desired major radius if necessary
 
 coils = bs.coils
 curves = [c.curve for c in coils]
@@ -664,24 +597,21 @@ print(f"Dipole coils: {n_dip}")
 print(f"Total coils: {n_total}")
 
 mu0 = 4.0 * np.pi * 1e-7
-# I gotta check whether to use abs or not, because with abs it fails
 currents = [(c.current.get_value()) for c in tf_coils]
 current_sum = sum(currents)
 #G0 = mu0 * current_sum  # signed-net-current guess
 #print(f'G0 (net-current) = {G0:.6e}')
-# just trying to see if it will work
 current_sum = sum(abs(c.current.get_value()) for c in tf_coils)
 G0 = - 2 * np.pi * current_sum * (4 * np.pi * 1e-7 / (2 * np.pi))
 #print(f"coil currents:{[c.current.get_value() for c in tf_coils]}")
 vmec = Vmec(filename)
-#iota_target = vmec.iota_edge()
+#iota_target = vmec.iota_edge to check the iota from the vmec file
 iota_target = 0.1
 # iota 0.11 failed
 print(f'iota target: {iota_target}')
-#vol_target = vmec.volume()
+#vol_target = vmec.volume() to check the volume from the vmec file
 vol_target = 0.45
 print(f'volume initial: {vmec.volume():.12e}')
-#vol_target = 0.45 # failed with fixed tf current, succeeded with unfixed tf current
 print(f'volume target: {vol_target:.12e}')
 surf_volume = float(surf.volume())
 print(f'initial surface volume: {surf_volume:.12e}')
@@ -699,10 +629,10 @@ axisfontsize = 14
 titlefontsize = 16
 cbarfontsize = 12
 ticklabelfontsize = 10
+
 # ------------------------
 # Adaptive Optimization Loop Over mpol
 # ------------------------
-
 for mpol in range(5,7):
     print(f"\n===== Starting adaptive-resolution optimization for mpol = {mpol} =====")
 
@@ -775,32 +705,20 @@ for mpol in range(5,7):
     SURF_DIST_WEIGHT = 1e3
     SS_DIST = 0.04
     phi_list = np.linspace(0, 1 / boozer_surface.surface.nfp, 5)
-    #NEWLY ADDED - I have to ask for threshold and weight
     CURRENT_THRESHOLD = 2e5
     CURRENT_WEIGHT = 1e4
-
     iotas = [Iotas(boozer_surface)]
-    #curvelength = CurveLength(banana_curves[0]) commented out for dipoles
-    # length_target = curvelength.J() commented out for dipoles
-    # Construct full objective function JF
     Jiotamax = sum([QuadraticPenalty(iota, iota_target) for iota in iotas])
     JnonQSRatio = sum(nonQSs)
     JBoozerResidual = sum(brs)
-    # JCurveLength = QuadraticPenalty(curvelength, length_target, 'max')
-    # JCurveCurve = CurveCurveDistance(curves, CC_DIST)
-    # JCurveSurface = CurveSurfaceDistance(curves, boozer_surface.surface, CS_DIST)
     JSurfSurf = SurfaceSurfaceDistance(boozer_surface.surface, VV, SS_DIST)
     dipole_current_dofs = [c.current for c in dipole_coils]
     JCurrentCap = CurrentCap(dipole_current_dofs, threshold=CURRENT_THRESHOLD)
     # Modified for dipoles
     JF = JnonQSRatio + RES_WEIGHT * JBoozerResidual + IOTAS_WEIGHT * Jiotamax \
          + SURF_DIST_WEIGHT * JSurfSurf + CURRENT_WEIGHT * JCurrentCap
-    # + LENGTH_WEIGHT * JCurveLength + CC_WEIGHT * JCurveCurve \
-    # + CS_WEIGHT * JCurveSurface
-
     dofs = JF.x
     # Construct current penalty term
-
     # ----------------------
     # Set Initial Run State
     # ----------------------
@@ -815,8 +733,6 @@ for mpol in range(5,7):
         'lscount': 0,
         'x_prev': dofs.copy()
     }
-    #commented out for dipoles
-
 
     # ----------------------
     # Perform Optimization
@@ -860,246 +776,3 @@ for mpol in range(5,7):
             os.replace(_opt_src, _opt_dst)
     except Exception:
         pass
-    # that is the check I used to determine G0 initial guesses, if I want it, I should insert it after unfix_all and delete the mu0.. block
-    '''
-    # python
-    def check_and_rescale_bs(bs, surf, out_dir=".", tol=1e-3, do_rescale=False):
-
-        # compute mean major radius of surface
-        surf_pts = surf.gamma().reshape((-1, 3))
-        surf_R = np.sqrt(surf_pts[:, 0] ** 2 + surf_pts[:, 1] ** 2)
-        surf_R0 = float(np.mean(surf_R))
-
-        # gather coil points for mean major radius
-        coil_pts_list = []
-        for c in bs.coils:
-            pts = c.curve.gamma()
-            coil_pts_list.append(pts.reshape((-1, 3)))
-        coil_pts = np.vstack(coil_pts_list)
-        coil_R = np.sqrt(coil_pts[:, 0] ** 2 + coil_pts[:, 1] ** 2)
-        coil_R0 = float(np.mean(coil_R))
-
-        if coil_R0 == 0:
-            raise RuntimeError("Invalid coil geometry: zero coil radius")
-
-        scale = surf_R0 / coil_R0
-        print(f"[scale check] surf_R0 = {surf_R0:.6e}, coils_R0 = {coil_R0:.6e}, scale = {scale:.6e}")
-
-        if abs(scale - 1.0) <= tol:
-            print("[scale check] Length units match within tolerance.")
-            return scale
-
-        print("[scale check] Length-unit mismatch detected.")
-        if not do_rescale:
-            print("[scale check] Call with do_rescale=True or reload a matching `bs`.")
-            return scale
-
-        # Attempt to rescale each coil curve using several supported APIs.
-        for idx, c in enumerate(bs.coils):
-            pts = c.curve.gamma().reshape((-1, 3))
-            pts_scaled = (pts * scale).reshape(pts.shape)
-            success = False
-
-            # Preferred API: set_gamma (accepts shaped points)
-            if hasattr(c.curve, "set_gamma"):
-                try:
-                    c.curve.set_gamma(pts_scaled)
-                    success = True
-                except Exception:
-                    success = False
-
-            # Alternative: set_points
-            if not success and hasattr(c.curve, "set_points"):
-                try:
-                    c.curve.set_points(pts_scaled)
-                    success = True
-                except Exception:
-                    success = False
-
-            # Alternative: get_dofs / set_dofs (scale dofs if they represent flattened points)
-            if not success and hasattr(c.curve, "get_dofs") and hasattr(c.curve, "set_dofs"):
-                try:
-                    dofs = np.asarray(c.curve.get_dofs(), dtype=float)
-                    if dofs.size == pts_scaled.size:
-                        scaled = (dofs.reshape(pts.shape) * scale).reshape(-1)
-                        c.curve.set_dofs(scaled)
-                        success = True
-                    else:
-                        success = False
-                except Exception:
-                    success = False
-
-            # Fallback: direct .dofs attribute mutation if it exists and is numeric
-            if not success and hasattr(c.curve, "dofs"):
-                try:
-                    dofs_attr = getattr(c.curve, "dofs")
-                    arr = np.asarray(dofs_attr, dtype=float)
-                    if arr.size == pts_scaled.size:
-                        new = (arr.reshape(pts.shape) * scale).reshape(-1)
-                        try:
-                            setattr(c.curve, "dofs", new)
-                        except Exception:
-                            # try elementwise mutation for list-like dofs_attr
-                            if isinstance(dofs_attr, (list, tuple)):
-                                mutable = list(dofs_attr)
-                                for i in range(len(mutable)):
-                                    mutable[i] = float(new[i])
-                                setattr(c.curve, "dofs", mutable)
-                        success = True
-                    else:
-                        success = False
-                except Exception:
-                    success = False
-
-            if not success:
-                raise RuntimeError(f"Unable to rescale coil {idx}: no supported setter found. Reload `bs` at matching units instead.")
-
-        # save rescaled bs
-        outpath = os.path.join(out_dir, "biot_savart_rescaled.json")
-        try:
-            if hasattr(bs, "save"):
-                bs.save(outpath)
-            else:
-                save(bs, outpath)
-            print(f"[scale check] Rescaled BiotSavart saved to {outpath}")
-        except Exception as e:
-            print("[scale check] Warning: failed to save rescaled BiotSavart:", e)
-
-        return scale
-
-
-    # Compute VMEC targets and robust G0 candidates, then try Boozer init with fallbacks
-    mu0 = 4.0 * np.pi * 1e-7
-
-    # load vmec and targets (once)
-    vmec = Vmec(filename)
-    iota_target = vmec.iota_edge()
-    vol_target = float(vmec.volume())
-    print(f'iota from vmec: {iota_target}')
-    print(f'volume from vmec: {vol_target:.12e}')
-    print(f'initial surface volume: {float(surf.volume()):.12e}')
-
-    # Attempt to ensure bs uses same length units as surf
-    try:
-        check_and_rescale_bs(bs, surf, out_dir=OUT_DIR, tol=1e-3, do_rescale=True)
-    except Exception as e:
-        print("[warning] Coil rescale attempt failed:", e)
-        print("[warning] Prefer re-generating `bs` in the same units as the wout file.")
-
-    # Compute currents and multiple G0 candidates
-    currents = [float(c.current.get_value()) for c in coils] if len(coils) > 0 else [0.0]
-    current_sum_signed = float(np.sum(currents))
-    current_sum_abs = float(np.sum(np.abs(currents)))
-    G0_signed = mu0 * current_sum_signed
-    G0_abs = mu0 * current_sum_abs
-    G0_small = mu0 * max(1.0, current_sum_abs) * 1e-4
-    G0_candidates = [G0_signed, G0_abs, G0_small]
-    print(f"[G0 candidates] signed = {G0_signed:.6e}, abs = {G0_abs:.6e}, small = {G0_small:.6e}")
-
-    # Build unique candidate list and sort: non-zero by descending abs, zero last
-    raw_candidates = G0_candidates
-    candidates = []
-    tol_unique = 1e-15
-    for g in raw_candidates:
-        if not any(abs(g - gg) < tol_unique for gg in candidates):
-            candidates.append(g)
-    # Sort so that zeros are last and others by descending magnitude
-    candidates = sorted(candidates, key=lambda g: (abs(g) == 0.0, -abs(g)))
-    print(f"[G0 candidates ordered] {['{:.6e}'.format(g) for g in candidates]}")
-
-    # Try initialize with each candidate G0 until it succeeds
-    boozer_surface = None
-    last_exception = None
-    G0 = None
-    for g_try in candidates:
-        try:
-            print(f"[boozer init] attempting initialize_boozer_surface with initial G0 = {g_try:.6e} and iota = {iota_target:.6e}")
-            boozer_surface = initialize_boozer_surface(surf, mpol, bs, vol_target, CONSTRAINT_WEIGHT, iota_target, g_try)
-            # prefer the solver-returned G value for consistency
-            try:
-                G0 = float(boozer_surface.res.get('G', g_try))
-            except Exception:
-                # fallback if res is not a dict-like
-                G0 = float(getattr(boozer_surface, "res", {}).get('G', g_try) if hasattr(boozer_surface, "res") else g_try)
-            print(f"[boozer init] succeeded; solver returned G0 = {G0:.6e}")
-            break
-        except Exception as e:
-            print(f"[boozer init] attempt with initial G0 = {g_try:.6e} failed: {e}")
-            last_exception = e
-
-    if boozer_surface is None:
-        # final fallback: try exact solver with a small nonzero G0
-        try:
-            print("[boozer init] final fallback: trying small initial G0 and CONSTRAINT_WEIGHT=None (exact solver)")
-            boozer_surface = initialize_boozer_surface(surf, mpol, bs, vol_target, None, iota_target, G0_small)
-            try:
-                G0 = float(boozer_surface.res.get('G', G0_small))
-            except Exception:
-                G0 = float(getattr(boozer_surface, "res", {}).get('G', G0_small) if hasattr(boozer_surface, "res") else G0_small)
-            print(f"[boozer init] fallback succeeded; solver returned G0 = {G0:.6e}")
-        except Exception as e:
-            print("[boozer init] fallback also failed:", e)
-            raise RuntimeError("Boozer initialization failed with all candidate G0 values.") from (last_exception or e)
-
-    # boozer_surface and G0 are now set and can be used in the rest of the script
-    '''
-
-    ''' Replaced with section above by chatgpt, to remove, delete the things between unfix and that line
-    # Compute G0 from TF coil currents (ampere-turns)
-    # or maybe try with all currents
-    current_sum = sum(abs(c.current.get_value()) for c in coils)
-    G0 = 2. * np.pi * current_sum * (4 * np.pi * 1e-7 / (2 * np.pi))  # µ_0 * total current
-    print(f'G0 from all coils: {G0}')
-    vmec = Vmec(filename)
-    iota_target = vmec.iota_edge()
-    print(f'iota from vmec: {iota_target}')
-    vol_target = vmec.volume()
-    print(f'volume from vmec: {vol_target}')
-    surf_volume = surf.volume()
-    print(f'initial surface volume: {surf_volume}')
-    # Export loaded dipole coils into vtk for visualization
-    wp_currents = [c.current.get_value() for c in dipole_coils]
-    curves_to_vtk(
-            curves = [c.curve for c in coils], filename=os.path.join(OUT_DIR, "wp_coils_new "), close=True
-            #I = wp_currents
-        )
-    print("initial coilset saved to vtk")
-    '''
-
-    ''' this one messed up the code and gave errors, I replaced it
-    # Create current cap class
-    class CurrentCap(Optimizable):
-        """
-        Soft cap on |I| for a set of current DOFs:
-          Jcp = sum_i max(|I_i| - threshold, 0)^2
-        """
-        def __init__(self, current_dofs, threshold):
-            # 'current_dofs' must be a list of Current objects whose DOFs are unfixed
-            super().__init__(depends_on=list(current_dofs))
-            self.threshold = float(threshold)
-            self._J = None
-            self._dJ = None
-
-        def J(self):
-            if self._J is None:
-                I = self.x  # vector of currents (same order as children)
-                excess = np.maximum(np.abs(I) - self.threshold, 0.0)
-                self._J = float(np.dot(excess, excess))
-            return self._J
-
-        def recompute_bell(self, parent=None):
-            self._J = None
-            self._dJ = None
-
-        @derivative_dec
-        def dJ(self):
-            if self._dJ is None:
-                I = self.x
-                diff = np.abs(I) - self.threshold
-                mask = diff > 0
-                # d/dI of (max(|I|-T,0))^2 = 2*max(|I|-T,0) * sign(I)
-                grad = np.where(I > 0.0, 2.0 * (I - self.threshold),
-                                          2.0 * (I + self.threshold))
-                self._dJ = (grad * mask).astype(float)
-            return self._dJ
-    '''
